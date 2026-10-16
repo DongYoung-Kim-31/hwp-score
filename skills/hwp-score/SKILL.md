@@ -57,6 +57,8 @@ python3 <skill-dir>/scripts/insert_split.py IN.hwp score.pdf -o IN_악보.hwp --
 ```
 
 - Multiple inputs are taken in order (`score.pdf p2.jpg p3.jpg`). `--pages 1-2,4` limits PDF pages.
+- `--group N` puts N consecutive lines in one picture ("2줄씩 잘라서" → `--group 2`); works
+  across page breaks and keeps each line's original indent (first line's instrument names).
 - One inline picture paragraph per **system** (a staff, or staves joined by a brace /
   system barline — piano grand staff, choir SATB stay together). `--per-staff` cuts every
   staff separately instead.
@@ -89,7 +91,8 @@ Tested: real engraved PDFs from mutopiaproject.org — Für Elise
 (3 p, 19 systems, beams fused into staff lines, pedal lines), Rondo alla Turca (5 p, 26),
 Bach Prelude C (2 p, 12), Anna Magdalena Minuet (1 p, 6): every system found, 2 staves
 each, in order → inserted into an HWPX copy; plus synthetic grand-staff/lyrics PDF and a
-1.2°-tilted noisy JPEG scan.
+1.2°-tilted noisy JPEG scan; Bach B minor Mass "Quoniam" full score (10 p, 30 lines × 5 staves,
+figured bass, lyrics) with `--group 2`.
 
 ## Measures (마디): pick bars, stitch bars from several lines into one line
 

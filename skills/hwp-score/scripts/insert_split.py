@@ -28,6 +28,7 @@ def main():
     ap.add_argument("--width", type=int, help="width of the widest system in HWPUNIT")
     ap.add_argument("--pages", help="PDF pages to use, e.g. 1-2,4")
     ap.add_argument("--per-staff", action="store_true")
+    ap.add_argument("--group", type=int, default=1, help="N lines (systems) per picture")
     ap.add_argument("--keep-title", action="store_true")
     ap.add_argument("--dpi", type=int, default=200)
     ap.add_argument("--keep-crops", help="also save the cropped system PNGs here")
@@ -70,6 +71,8 @@ def main():
             cmd.append("--per-staff")
         if a.keep_title:
             cmd.append("--keep-title")
+        if a.group > 1:
+            cmd += ["--group", str(a.group)]
         p = subprocess.run(cmd, capture_output=True, text=True)
         if p.returncode:
             sys.exit(p.stderr.strip() or p.stdout.strip())

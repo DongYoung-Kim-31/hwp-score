@@ -92,6 +92,14 @@ def find_staves(ink, min_span, line_ink=None):
         near = np.where((starts - tol <= pos) & (pos <= ends - 1 + tol) & ~used)[0]
         return int(near[np.argmin(np.abs(centers[near] - pos))]) if near.size else None
 
+    # typical staff-line spacing on this page = most common gap between consecutive
+    # thin lines; ladders far from it (a beam + the next staff's lines, 4x apart) are
+    # not staves
+    thin_c = centers[thick <= 4]
+    gaps = np.round(np.diff(thin_c)).astype(int) if thin_c.size > 1 else np.array([], int)
+    gaps = gaps[(gaps >= 3) & (gaps <= max_sp)]
+    sp_ref = float(np.bincount(gaps).argmax()) if gaps.size else None
+
     staves = []
     # anchor on pairs of *thin* lines (clean staff lines), then look for 5 evenly spaced
     # covered positions around them — up or down, since beams can swallow the top or
@@ -106,6 +114,8 @@ def find_staves(ink, min_span, line_ink=None):
             if g > max_sp:
                 break
             if g < 3 or used[j] or thick[j] > max(3, 0.4 * g):
+                continue
+            if sp_ref and abs(g - sp_ref) > max(1.5, 0.3 * sp_ref):
                 continue
             tol = max(1.5, 0.2 * g)
             best = None
@@ -319,6 +329,36 @@ def split_page(gray, page_no, outdir, stem, args, counter):
     return results
 
 
+def group_systems(systems, n, outdir):
+    """Stack every n consecutive system crops into one image (works across page
+    breaks). Each line keeps its original horizontal position on the page, so the
+    first line's indent / instrument names line up as in the source."""
+    grouped = []
+    for gi in range(0, len(systems), n):
+        part = systems[gi:gi + n]
+        ims = [Image.open(s["png"]) for s in part]
+        left = min(s["box"][0] for s in part)
+        # crops carry a white margin of `pad` px; recover it from size vs. box
+        offs = [s["box"][0] - left for s in part]
+        width = max(o + im.width for o, im in zip(offs, ims))
+        gap = max(4, ims[0].height // 12)
+        height = sum(im.height for im in ims) + gap * (len(ims) - 1)
+        canvas = Image.new("L", (width, height), 255)
+        y = 0
+        for o, im in zip(offs, ims):
+            canvas.paste(im.convert("L"), (o, y))
+            y += im.height + gap
+        stem = os.path.splitext(os.path.basename(part[0]["png"]))[0].rsplit("-", 1)[0]
+        png = os.path.join(outdir, f"{stem}-g{gi // n + 1:02d}.png")
+        canvas.save(png)
+        for s, im in zip(part, ims):
+            im.close()
+            os.remove(s["png"])
+        grouped.append({"png": png, "page": part[0]["page"], "pages": sorted({s["page"] for s in part}),
+                        "staves": part[0]["staves"], "lines": len(part)})
+    return grouped
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("inputs", nargs="+", help="PDF or image files (png/jpg/tif), in order")
@@ -328,6 +368,8 @@ def main():
     ap.add_argument("--per-staff", action="store_true", help="one image per staff, ignore braces")
     ap.add_argument("--no-deskew", action="store_true", help="skip tilt correction for scans")
     ap.add_argument("--keep-title", action="store_true", help="keep page header with first system")
+    ap.add_argument("--group", type=int, default=1,
+                    help="put N consecutive systems (lines) in one image, e.g. 2 = two lines per picture")
     ap.add_argument("--min-span", type=float, default=0.12,
                     help="shortest unbroken horizontal stroke counted as a staff line, "
                          "as a fraction of the page's content width")
@@ -349,6 +391,8 @@ def main():
             if not got:
                 empty.append(f"{os.path.basename(path)} p{n}")
             out += got
+    if args.group > 1 and out:
+        out = group_systems(out, args.group, args.outdir)
     print(json.dumps({"systems": out, "pages_without_staves": empty}, ensure_ascii=False, indent=1))
     if not out:
         sys.exit("no staves found — scan too faint/skewed? try --min-span 0.06 or a higher --dpi")
