@@ -1,0 +1,16 @@
+{
+  "name": "hwp-score",
+  "owner": {
+    "name": "DongYoung-Kim-31"
+  },
+  "metadata": {
+    "description": "한글(HWP/HWPX) 문서에 악보를 넣는 Claude Code 플러그인"
+  },
+  "plugins": [
+    {
+      "name": "hwp-score",
+      "source": "./",
+      "description": "한글(HWP/HWPX) 문서에 악보 넣기 — 텍스트 악보 생성, PDF/스캔 줄 단위 자르기, 마디 이어붙이기"
+    }
+  ]
+}
