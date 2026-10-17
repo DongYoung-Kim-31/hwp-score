@@ -101,6 +101,12 @@ def main():
         run(RHWP, "edit", "insert-paragraph", cur, "--section", a.section,
             "--para", para, "-o", nxt, "--json")
         cur = nxt
+        # the new paragraph inherits the previous one's paragraph shape; if that is a
+        # heading with "page break before", every inserted score would start a new page
+        nxt = os.path.join(tmp, "s1b" + ext)
+        run(RHWP, "edit", "apply-para-format", cur, "--section", a.section, "--para", para,
+            "--props", json.dumps({"pageBreakBefore": False}), "-o", nxt, "--json")
+        cur = nxt
     else:
         para = a.into
 

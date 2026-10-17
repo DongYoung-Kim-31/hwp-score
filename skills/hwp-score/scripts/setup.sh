@@ -16,9 +16,9 @@ if [ ! -x "$VENV/bin/python" ]; then
   say "creating venv $VENV"
   python3 -m venv "$VENV"
 fi
-if ! "$VENV/bin/python" -c "import verovio, pypdfium2, numpy, PIL" 2>/dev/null; then
-  say "installing Python packages (verovio pypdfium2 numpy pillow)"
-  "$VENV/bin/pip" install -q --disable-pip-version-check verovio pypdfium2 numpy pillow
+if ! "$VENV/bin/python" -c "import verovio, pypdfium2, numpy, PIL, scipy" 2>/dev/null; then
+  say "installing Python packages (verovio pypdfium2 numpy pillow scipy)"
+  "$VENV/bin/pip" install -q --disable-pip-version-check verovio pypdfium2 numpy pillow scipy
 fi
 say "python ok: $("$VENV/bin/python" -c 'import verovio; print("verovio", verovio.toolkit().getVersion())')"
 

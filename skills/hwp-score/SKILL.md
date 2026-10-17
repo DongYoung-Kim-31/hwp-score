@@ -25,7 +25,7 @@ Run the setup script once per machine; it is idempotent and prints what it did:
 bash <skill-dir>/scripts/setup.sh
 ```
 
-It creates the Python venv `~/.cache/hwp-score/venv` (verovio, pypdfium2, numpy,
+It creates the Python venv `~/.cache/hwp-score/venv` (verovio, pypdfium2, numpy, scipy,
 pillow), installs `librsvg` with Homebrew if `rsvg-convert` is missing, and installs the
 `rhwp` CLI (github.com/edwardkim/rhwp release, SHA-256 checked) to `~/.local/bin/rhwp`
 if it is not on PATH. Ask the user before running it the first time (it installs
@@ -69,6 +69,19 @@ python3 <skill-dir>/scripts/insert_split.py IN.hwp score.pdf -o IN_악보.hwp --
   ledger-line notes and measure numbers stay with their system (cut = middle of the
   blank band between systems).
 - Scans: tilt up to ±3° is corrected, speckle removed, grey paper whitened.
+- **Manuscripts (손사보) and phone photos**: paper colour / uneven light is flattened;
+  wavy hand-ruled or perspective-slanted staff lines are found in vertical strips and
+  chained; faint ruled lines and blurred (upscaled) lines are tried with several
+  thresholds; blank pre-ruled staves are skipped; staves without a brace are grouped
+  by barlines through the gap or by the spacing pattern; where notes of neighbouring
+  lines interleave, each line keeps only its own ink (staff lines removed, every blob
+  given to the staff it overlaps most). Small images (<1600 px wide) are upscaled.
+- Results on real manuscripts (Wikimedia Commons): Bach BWV 1001 autograph 11/11
+  lines clean; Chopin Mazurka Op.56/1 autograph 5/5 grand staves; synthetic phone photo
+  (perspective + shading + 2°) 6/6; 60-dpi screenshot 6/6. **Weak**: very faint or
+  messy pages (Chopin Prelude Op.28/4 autograph: about half the staves) and handwritten
+  orchestral scores (Mozart K.317: staves found but not joined into one system — use
+  `--group N` to stack them). Always compare the line count with the source.
 - Prints JSON with each system's `paragraph`/`page` and `previews` — **Read the previews**
   and check the count of systems matches the source before reporting done.
 - Just the crops (no HWP): `~/.cache/hwp-score/venv/bin/python <skill-dir>/scripts/split_score.py score.pdf -o crops/`
@@ -126,6 +139,8 @@ piece), drops the borrowed line's printed bar number, aligns **each staff separa
 (pedal, fingering, dynamics). Barlines = vertical strokes across every staff of the
 line; where the edition draws them through the gap between piano staves that is
 required (stems never do), otherwise they must stop at the staff (stems stick out).
+Barline detection is reliable on engraved scores and photos of them (phone photo: 30/32
+measures); on **handwritten** scores it is not — stitch measures only from engraved sources.
 Limits: all picked measures must come from one score with the same number of staves
 per line; clef/key changes inside the range aren't re-checked (the header is the first
 line's); a volta bracket hook or slur end may leave a small stray mark at a cut.

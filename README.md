@@ -20,7 +20,7 @@ claude plugin install hwp-score@hwp-score
 ```
 
 처음 쓸 때 Claude가 `skills/hwp-score/scripts/setup.sh`를 실행해 의존성을 설치한다(사용자 확인 후):
-Python venv(`~/.cache/hwp-score/venv`: verovio, pypdfium2, numpy, pillow), Homebrew `librsvg`,
+Python venv(`~/.cache/hwp-score/venv`: verovio, pypdfium2, numpy, pillow, scipy), Homebrew `librsvg`,
 `rhwp` CLI(github.com/edwardkim/rhwp 릴리스, SHA-256 검증, `~/.local/bin/rhwp`).
 
 요구: macOS, Python 3.10+, Homebrew. 한컴오피스는 필요 없다(결과 확인용으로만).

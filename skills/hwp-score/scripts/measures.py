@@ -42,9 +42,18 @@ def staff_line_rows(st):
     return rows
 
 
-def find_barlines(ink, staves):
+def find_barlines(ink, staves, slant=0):
     """x-ranges of barlines: thin vertical strokes covering every staff of the system
-    and not sticking out above/below it (stems do)."""
+    and not sticking out above/below it (stems do). slant>0 widens each column by
+    +-slant px so leaning hand-drawn or photographed barlines still count."""
+    if slant:
+        wide = ink.copy()
+        for d in range(1, slant + 1):
+            wide[:, d:] |= ink[:, :-d]
+            wide[:, :-d] |= ink[:, d:]
+    else:
+        wide = ink
+    cover = 0.8 if slant else 0.9
     x0 = min(st["x0"] for st in staves)
     x1 = max(st["x1"] for st in staves)
     sp = max(st["sp"] for st in staves)
@@ -52,8 +61,8 @@ def find_barlines(ink, staves):
     ok[:x0] = False
     ok[x1 + 1:] = False
     for st in staves:
-        body = ink[st["top"]:st["bottom"] + 1]
-        ok &= body.mean(axis=0) >= 0.9
+        body = wide[st["top"]:st["bottom"] + 1]
+        ok &= body.mean(axis=0) >= cover
     top, bot = staves[0]["top"], staves[-1]["bottom"]
     above = ink[max(0, int(top - 0.7 * sp)):max(0, int(top - 0.2 * sp))]
     below = ink[int(bot + 0.2 * sp):int(bot + 0.7 * sp)]
@@ -61,9 +70,9 @@ def find_barlines(ink, staves):
     clean_below = below.mean(axis=0) <= 0.35 if below.size else np.ones_like(ok)
     span = np.ones_like(ok)
     for k in range(len(staves) - 1):
-        gap = ink[staves[k]["bottom"] + 1:staves[k + 1]["top"]]
+        gap = wide[staves[k]["bottom"] + 1:staves[k + 1]["top"]]
         if gap.size:
-            span &= gap.mean(axis=0) >= 0.9
+            span &= gap.mean(axis=0) >= cover
     if len(staves) > 1 and len(runs(ok & span)) >= 2:
         # this edition draws barlines through the gaps between staves (piano span
         # bars); stems never do, so require it
@@ -129,6 +138,13 @@ def analyse(inputs, dpi, first_measure, keep_title=False):
                           "ink": ink, "paper": paper, "systems": systems})
             for si, sy in enumerate(systems):
                 bars, x0, x1, sp = find_barlines(ink, sy["staves"])
+                if len(sy["staves"]) > 1:
+                    # leaning / wobbly barlines (manuscripts, phone photos). Only where
+                    # barlines must also cross the gap between staves - on a single
+                    # staff a widened search mistakes stems for barlines.
+                    tb = find_barlines(ink, sy["staves"], slant=max(2, int(0.25 * sp)))[0]
+                    if len(tb) > len(bars):
+                        bars = tb
                 start = x0
                 if bars and bars[0][0] - x0 <= 1.0 * sp:      # system start line
                     start = bars[0][1]

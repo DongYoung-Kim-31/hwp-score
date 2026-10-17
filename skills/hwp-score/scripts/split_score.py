@@ -37,9 +37,14 @@ def load_pages(path, dpi):
             if img.mode in ("RGBA", "LA", "P"):
                 bg = Image.new("RGBA", img.size, "white")
                 bg.alpha_composite(img.convert("RGBA"))
-                yield bg.convert("L")
+                g = bg.convert("L")
             else:
-                yield img.convert("L")
+                g = img.convert("L")
+            if g.width < 1600:
+                # screenshots / low-res scans: 1-px staff lines need room to be found
+                f = 2000 / g.width
+                g = g.resize((2000, int(g.height * f)), Image.BICUBIC)
+            yield g
             frame += 1
             try:
                 img.seek(frame)
@@ -95,7 +100,8 @@ def find_staves(ink, min_span, line_ink=None):
     # typical staff-line spacing on this page = most common gap between consecutive
     # thin lines; ladders far from it (a beam + the next staff's lines, 4x apart) are
     # not staves
-    thin_c = centers[thick <= 4]
+    lim = max(4.0, 1.6 * float(np.median(thick))) if len(thick) else 4.0
+    thin_c = centers[thick <= lim]
     gaps = np.round(np.diff(thin_c)).astype(int) if thin_c.size > 1 else np.array([], int)
     gaps = gaps[(gaps >= 3) & (gaps <= max_sp)]
     sp_ref = float(np.bincount(gaps).argmax()) if gaps.size else None
@@ -106,14 +112,14 @@ def find_staves(ink, min_span, line_ink=None):
     # the bottom lines of a staff
     order = np.argsort(centers)
     for i in order:
-        if used[i] or thick[i] > 4:
+        if used[i] or thick[i] > lim:
             continue
         found = None
         for j in range(i + 1, len(lines)):
             g = centers[j] - centers[i]
             if g > max_sp:
                 break
-            if g < 3 or used[j] or thick[j] > max(3, 0.4 * g):
+            if g < 3 or used[j] or thick[j] > max(3, 0.5 * g) or thick[i] > max(3, 0.5 * g):
                 continue
             if sp_ref and abs(g - sp_ref) > max(1.5, 0.3 * sp_ref):
                 continue
@@ -126,7 +132,7 @@ def find_staves(ink, min_span, line_ink=None):
                 idx = [cover(centers[i] + k * g, tol) for k in ks]
                 if None in idx or len(set(idx)) < 4:
                     continue
-                thin = sum(thick[t] <= max(3, 0.4 * g) for t in idx)
+                thin = sum(thick[t] <= max(3, 0.5 * g) for t in idx)
                 if thin >= 3 and (best is None or thin > best[0]):
                     best = (thin, idx, centers[i] + ks[0] * g, g)
             if best:
@@ -177,7 +183,143 @@ def find_staves(ink, min_span, line_ink=None):
     return final
 
 
-def connected(ink, a, b):
+def normalize_light(gray):
+    """Flatten paper colour and uneven lighting (aged paper, phone photos): divide by
+    a smooth estimate of the local background. Clean renders stay unchanged."""
+    from PIL import ImageFilter
+    small = gray.resize((max(1, gray.width // 8), max(1, gray.height // 8)))
+    bg = small.filter(ImageFilter.MaxFilter(7)).filter(ImageFilter.GaussianBlur(4))
+    bg = np.asarray(bg.resize(gray.size, Image.BILINEAR)).astype(np.float32)
+    a = np.asarray(gray).astype(np.float32)
+    out = np.clip(a / np.maximum(bg, 1) * 255.0, 0, 255).astype(np.uint8)
+    return Image.fromarray(out)
+
+
+def find_staves_strips(ink, line_ink, nstrips=16):
+    """Staff finder for hand-ruled, wavy or perspective-distorted lines: find short
+    5-line ladders in vertical strips, then chain them across strips."""
+    h, w = ink.shape
+    cols = np.where(ink.any(axis=0))[0]
+    if cols.size == 0:
+        return []
+    c0, c1 = int(cols[0]), int(cols[-1]) + 1
+    sw = max(40, (c1 - c0) // nstrips)
+    dil = line_ink.copy()
+    dil[1:] |= line_ink[:-1]
+    dil[:-1] |= line_ink[1:]
+    per_strip = []
+    for si, x in enumerate(range(c0, c1 - sw // 2, sw)):
+        frac = dil[:, x:x + sw].mean(axis=1)
+        rr = runs(frac >= 0.55)
+        cen = np.array([(a_ + b_ - 1) / 2 for a_, b_ in rr])
+        thk = np.array([b_ - a_ for a_, b_ in rr])
+        used = np.zeros(len(cen), bool)
+        found = []
+        for i in range(len(cen)):
+            if used[i]:
+                continue
+            for j in range(i + 1, len(cen)):
+                g = cen[j] - cen[i]
+                if g > (c1 - c0) * 0.03:
+                    break
+                # staff lines are thin relative to their spacing (upscaled / photographed
+                # lines can be 8-12 px thick); beams fused onto a line are not
+                if g < 3 or used[j] or thk[i] > max(4, 0.6 * g) or thk[j] > max(4, 0.6 * g):
+                    continue
+                tol = max(1.5, 0.22 * g)
+                idx = [i, j]
+                for k in (2, 3, 4):
+                    near = np.where((np.abs(cen - (cen[i] + k * g)) <= tol) & ~used)[0]
+                    if near.size == 0:
+                        break
+                    idx.append(int(near[np.argmin(np.abs(cen[near] - (cen[i] + k * g)))]))
+                if len(idx) == 5:
+                    used[idx] = True
+                    found.append((float(cen[i]), float((cen[idx[-1]] - cen[i]) / 4)))
+                    break
+        per_strip.append((x, found))
+    # chain strip ladders left to right
+    chains = []
+    for si, (x, found) in enumerate(per_strip):
+        for top, sp in found:
+            best = None
+            for ch in chains:
+                ls, lx, ltop, lsp = ch[-1]
+                if 0 < si - ls <= 2 and abs(top - ltop) <= 1.2 * max(sp, lsp) and abs(sp - lsp) <= 0.3 * lsp:
+                    if best is None or abs(top - ltop) < abs(top - best[-1][2]):
+                        best = ch
+            if best is not None:
+                best.append((si, x, top, sp))
+            else:
+                chains.append([(si, x, top, sp)])
+    out = []
+    need = max(3, int(0.15 * len(per_strip)))
+    for ch in chains:
+        if len(ch) < need:
+            continue
+        sps = np.array([c[3] for c in ch])
+        sp = float(np.median(sps))
+        tops = np.array([c[2] for c in ch])
+        out.append({"top": int(tops.min()) - 1, "bottom": int(tops.max() + 4 * sp) + 2, "sp": sp,
+                    "x0": int(ch[0][1]), "x1": int(min(w - 1, ch[-1][1] + sw)), "wavy": True})
+    if not out:
+        return out
+    ref = np.median([o["sp"] for o in out])
+    out = [o for o in out if abs(o["sp"] - ref) <= 0.3 * ref]
+    out.sort(key=lambda o: o["top"])
+    final = []
+    for o in out:
+        if final and o["top"] <= final[-1]["bottom"]:
+            if (o["x1"] - o["x0"]) > (final[-1]["x1"] - final[-1]["x0"]):
+                final[-1] = o
+            continue
+        final.append(o)
+    return final
+
+
+def notation_density(ink, st):
+    """Share of the staff's band covered by notation (ink minus long horizontal strokes,
+    i.e. minus the staff lines themselves)."""
+    sp = st["sp"]
+    band = ink[max(0, st["top"]):st["bottom"] + 1, st["x0"]:st["x1"] + 1]
+    if band.size == 0:
+        return 0.0
+    long_run = int(2.5 * sp)
+    keep = band.copy()
+    for y in range(band.shape[0]):
+        for a_, b_ in runs(band[y]):
+            if b_ - a_ >= long_run:
+                keep[y, a_:b_] = False
+    return float(keep.mean())
+
+
+def merge_staves(*lists):
+    """Union of staff lists from different finders; overlapping finds are one staff
+    (keep the widest)."""
+    allst = sorted([st for lst in lists for st in lst], key=lambda o: o["top"])
+    out = []
+    for o in allst:
+        if out and o["top"] <= out[-1]["bottom"] - o["sp"]:
+            prev = out[-1]
+            # prefer the straight-line finder's staff (exact start x, used to find
+            # braces); take the strip finder's only if it is clearly wider
+            if prev.get("wavy") and not o.get("wavy"):
+                if (prev["x1"] - prev["x0"]) < 1.3 * (o["x1"] - o["x0"]):
+                    out[-1] = o
+            elif o.get("wavy") and not prev.get("wavy"):
+                if (o["x1"] - o["x0"]) > 1.3 * (prev["x1"] - prev["x0"]):
+                    out[-1] = o
+            elif (o["x1"] - o["x0"]) > (prev["x1"] - prev["x0"]):
+                out[-1] = o
+            continue
+        out.append(o)
+    if out:
+        ref = float(np.median([o["sp"] for o in out]))
+        out = [o for o in out if abs(o["sp"] - ref) <= 0.3 * ref]
+    return out
+
+
+def connected(ink, a, b, soft=None):
     """True if a vertical stroke joins staff a to staff b near their left edge."""
     x0 = min(a["x0"], b["x0"])
     reach = int(max(a["sp"], b["sp"]) * 3)
@@ -185,9 +327,23 @@ def connected(ink, a, b):
     if hi <= lo:
         return True
     band = ink[lo:hi, max(0, x0 - reach):x0 + reach]
-    if band.size == 0:
+    if band.size and (band.mean(axis=0) > 0.9).any():
+        return True
+    # no brace/system line at the left (common in manuscripts): barlines drawn
+    # through the gap between the two staves also join them; allow slight slant
+    if hi - lo > 6 * max(a["sp"], b["sp"]):
         return False
-    return bool((band.mean(axis=0) > 0.9).any())
+    xa, xb = max(a["x0"], b["x0"]), min(a["x1"], b["x1"])
+    gap = (soft if soft is not None else ink)[lo:hi, xa:xb]
+    if gap.size == 0:
+        return False
+    # hand-drawn barlines lean and wobble: widen each column by +-3 px
+    g2 = gap.copy()
+    for d in (1, 2, 3):
+        g2[:, d:] |= gap[:, :-d]
+        g2[:, :-d] |= gap[:, d:]
+    hits = runs(g2.mean(axis=0) > 0.85)
+    return len(hits) >= 2
 
 
 def cut_between(ink, lo, hi, min_blank, prefer="middle"):
@@ -262,25 +418,71 @@ def detect_systems(gray, min_span=0.12, per_staff=False, keep_title=False, no_de
     paper_px = raw[raw > np.percentile(raw, 60) - 30]
     if paper_px.std() > 4:  # speckled scan; a clean render's paper is flat (and a
         gray = gray.filter(ImageFilter.MedianFilter(3))  # median would erase 1-px lines)
+    gray = normalize_light(gray)
     if not no_deskew:
         gray, _ = deskew(gray)
     a = np.asarray(gray)
     paper = float(np.percentile(a, 75))           # background (paper) gray level
     ink = a < min(INK, paper - 80)
-    loose = a < min(215, paper - 35)
-    # staff lines are often 1 px and anti-aliased (gray, or split over two rows):
-    # detect them on a looser mask with 1-row vertical gaps bridged
-    line_ink = loose.copy()
-    line_ink[1:] |= loose[:-1]
-    staves = find_staves(ink, min_span, line_ink)
+    # staff lines are often 1 px and anti-aliased (gray, or split over two rows), or
+    # blurred and widened (upscaled screenshots, photos). Try a few "is this part of a
+    # line" thresholds, bridge 1-row gaps, run both finders and merge; keep the best.
+    staves = []
+    # 245/235: faint hand-ruled lines on manuscript paper; 185/165: blurred lines
+    for lt in (215, 245, 235, 185, 165):
+        loose = a < min(lt, paper - 8)
+        line_ink = loose.copy()
+        line_ink[1:] |= loose[:-1]
+        found = merge_staves(find_staves(ink, min_span, line_ink),
+                             find_staves_strips(ink, line_ink),
+                             find_staves_strips(ink, line_ink, 24))
+        if len(found) > len(staves):
+            staves = found
+    soft = a < paper - 60          # faint hand-drawn barlines still count here
+    if len(staves) >= 3:
+        # blank ruled staves (manuscript paper) carry no notation
+        dens = [notation_density(ink, st) for st in staves]
+        med = float(np.median(dens))
+        staves = [st for st, d in zip(staves, dens) if d >= 0.12 * med and d > 0.002]
     if not staves:
         return gray, ink, paper, []
     groups = [[staves[0]]]
     for st in staves[1:]:
-        if not per_staff and connected(ink, groups[-1][-1], st):
+        if not per_staff and connected(ink, groups[-1][-1], st, soft):
             groups[-1].append(st)
         else:
             groups.append([st])
+    if not per_staff and len(staves) >= 4 and all(len(g) == 1 for g in groups):
+        # nothing joins the staves (manuscripts without braces): fall back to spacing.
+        # Staves of one system sit closer together than the systems do.
+        gaps = np.array([staves[i + 1]["top"] - staves[i]["bottom"] for i in range(len(staves) - 1)], float)
+        lo_g, hi_g = gaps.min(), gaps.max()
+        if hi_g > 1.6 * max(lo_g, 1):
+            thr = (lo_g + hi_g) / 2
+            for _ in range(10):                      # 2-means on the gap sizes
+                small, big = gaps[gaps < thr], gaps[gaps >= thr]
+                if not small.size or not big.size:
+                    break
+                thr = (small.mean() + big.mean()) / 2
+            groups = [[staves[0]]]
+            for i, st in enumerate(staves[1:]):
+                if gaps[i] < thr:
+                    groups[-1].append(st)
+                else:
+                    groups.append([st])
+    sizes = [len(g) for g in groups]
+    if len(groups) >= 3:
+        k = max(set(sizes), key=sizes.count)
+        if (k > 1 and sizes.count(k) >= len(groups) / 2) or (k == 1 and sizes.count(1) >= 0.75 * len(groups)):
+            # a group that is a whole multiple of the usual system size joined two
+            # systems (a stray stroke across the gap): split it back
+            fixed = []
+            for g in groups:
+                if len(g) > k and len(g) % k == 0:
+                    fixed += [g[i:i + k] for i in range(0, len(g), k)]
+                else:
+                    fixed.append(g)
+            groups = fixed
     h, w = ink.shape
     systems = []
     for i, sys_ in enumerate(groups):
@@ -308,22 +510,104 @@ def clean_crop(gray, paper, box, pad):
     return ImageOps.expand(cut, border=pad, fill=255) if pad else cut
 
 
+def own_ink(ink, systems, i, r0, r1):
+    """Ink in rows [r0, r1) that belongs to system i. Needed when lines of notes
+    interleave (manuscripts, dense scores) and no straight cut separates them.
+
+    Staff lines are taken out first (otherwise every note touching a line merges
+    with that whole staff into one blob); the remaining blobs - notes, stems, beams,
+    slurs, text - go to the staff band they overlap most, floating ones to the nearer
+    staff; finally this system's own staff lines are added back."""
+    from scipy import ndimage
+    region = ink[r0:r1]
+    sp = max(st["sp"] for st in systems[i]["staves"])
+    # staff-line pixels = long horizontal runs
+    lines = np.zeros_like(region)
+    long_run = int(2.5 * sp)
+    for y in range(region.shape[0]):
+        for a_, b_ in runs(region[y]):
+            if b_ - a_ >= long_run:
+                lines[y, a_:b_] = True
+    notes = region & ~lines
+    lab, n = ndimage.label(notes, structure=np.ones((3, 3), bool))
+    pad = int(0.5 * sp)
+    own = [(st["top"] - r0 - pad, st["bottom"] - r0 + pad) for st in systems[i]["staves"]]
+    nb = []
+    if i > 0:
+        nb += [(st["top"] - r0 - pad, st["bottom"] - r0 + pad) for st in systems[i - 1]["staves"]]
+    if i + 1 < len(systems):
+        nb += [(st["top"] - r0 - pad, st["bottom"] - r0 + pad) for st in systems[i + 1]["staves"]]
+    keep = np.zeros(n + 1, bool)
+    if n:
+        rows_of = np.arange(region.shape[0])
+        def band_mask(bands):
+            m = np.zeros(region.shape[0], bool)
+            for a_, b_ in bands:
+                m[max(0, a_):max(0, b_ + 1)] = True
+            return m
+        in_own = band_mask(own)[:, None] & notes
+        in_nb = band_mask(nb)[:, None] & notes
+        cnt_own = ndimage.sum(in_own, lab, index=np.arange(1, n + 1))
+        cnt_nb = ndimage.sum(in_nb, lab, index=np.arange(1, n + 1))
+        objs = ndimage.find_objects(lab)
+        for k in range(1, n + 1):
+            co, cn = cnt_own[k - 1], cnt_nb[k - 1]
+            if co or cn:
+                keep[k] = co >= cn
+            else:
+                sl = objs[k - 1]
+                mid = (sl[0].start + sl[0].stop) / 2
+                d_own = min(min(abs(mid - a_), abs(mid - b_)) for a_, b_ in own)
+                d_nb = min((min(abs(mid - a_), abs(mid - b_)) for a_, b_ in nb), default=1e9)
+                keep[k] = d_own <= d_nb
+    mine = keep[lab] & notes
+    own_rows = np.zeros(region.shape[0], bool)
+    for st in systems[i]["staves"]:
+        own_rows[max(0, st["top"] - r0 - 2):st["bottom"] - r0 + 3] = True
+    return mine | (lines & own_rows[:, None])
+
+
 def split_page(gray, page_no, outdir, stem, args, counter):
     gray, ink, paper, systems = detect_systems(gray, args.min_span, args.per_staff,
                                                args.keep_title, args.no_deskew)
     results = []
-    for sy in systems:
+    h = ink.shape[0]
+    for i, sy in enumerate(systems):
         y0, y1 = sy["y0"], sy["y1"]
-        band = ink[y0:y1]
-        cols = np.where(band.any(axis=0))[0]
-        rows = np.where(band.any(axis=1))[0]
-        # crop strictly inside this system's cut lines (never past them into the
-        # neighbour's markings), then add white margin around the ink
-        x0, x1 = int(cols[0]), int(cols[-1]) + 1
-        yy0, yy1 = y0 + int(rows[0]), y0 + int(rows[-1]) + 1
+        dirty = ink[y0].any() or ink[min(h - 1, y1 - 1)].any()
+        if dirty and not args.per_staff:
+            # the straight cut runs through notes: separate the lines blob by blob
+            # within the span between the neighbouring systems' staves
+            # label over a span that includes the neighbours' nearest staves, so
+            # their notes are seen touching them
+            r0 = systems[i - 1]["staves"][-1]["top"] if i > 0 else y0
+            r1 = systems[i + 1]["staves"][0]["bottom"] + 1 if i + 1 < len(systems) else y1
+            mine = own_ink(ink, systems, i, r0, r1)
+            cols = np.where(mine.any(axis=0))[0]
+            rows = np.where(mine.any(axis=1))[0]
+            x0, x1 = int(cols[0]), int(cols[-1]) + 1
+            yy0, yy1 = r0 + int(rows[0]), r0 + int(rows[-1]) + 1
+            # whiten everyone else's ink (and its anti-aliased rim) inside the box
+            from scipy import ndimage
+            other = ink[r0:r1] & ~mine
+            other = ndimage.binary_dilation(other, iterations=2) & ~ndimage.binary_dilation(mine, iterations=1)
+            arr = np.asarray(gray).copy()
+            sub = arr[r0:r1]
+            sub[other] = 255
+            arr[r0:r1] = sub
+            src = Image.fromarray(arr)
+        else:
+            band = ink[y0:y1]
+            cols = np.where(band.any(axis=0))[0]
+            rows = np.where(band.any(axis=1))[0]
+            # crop strictly inside this system's cut lines (never past them into the
+            # neighbour's markings), then add white margin around the ink
+            x0, x1 = int(cols[0]), int(cols[-1]) + 1
+            yy0, yy1 = y0 + int(rows[0]), y0 + int(rows[-1]) + 1
+            src = gray
         counter[0] += 1
         png = os.path.join(outdir, f"{stem}-{counter[0]:02d}.png")
-        clean_crop(gray, paper, (x0, yy0, x1, yy1), int(sy["sp"])).save(png)
+        clean_crop(src, paper, (x0, yy0, x1, yy1), int(sy["sp"])).save(png)
         results.append({"png": png, "page": page_no, "staves": len(sy["staves"]),
                         "box": [int(x0), int(yy0), int(x1), int(yy1)]})
     return results
