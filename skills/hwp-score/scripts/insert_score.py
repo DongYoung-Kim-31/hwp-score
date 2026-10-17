@@ -66,6 +66,8 @@ def main():
     g.add_argument("--into", type=int)
     ap.add_argument("--section", type=int, default=0)
     ap.add_argument("--width", type=int, help="picture width in HWPUNIT")
+    ap.add_argument("--align", choices=["left", "center", "right"], default="left",
+                    help="alignment of the score paragraph (default left)")
     ap.add_argument("--verify-dir", help="render the result page(s) here as PNG")
     a = ap.parse_args()
 
@@ -101,11 +103,14 @@ def main():
         run(RHWP, "edit", "insert-paragraph", cur, "--section", a.section,
             "--para", para, "-o", nxt, "--json")
         cur = nxt
-        # the new paragraph inherits the previous one's paragraph shape; if that is a
-        # heading with "page break before", every inserted score would start a new page
+        # the new paragraph inherits the previous one's paragraph shape: a heading's
+        # "page break before" would put every score on its own page, a right-aligned
+        # caption would push short lines to the right. (Compact JSON: rhwp ignores
+        # --props that contain spaces.)
         nxt = os.path.join(tmp, "s1b" + ext)
         run(RHWP, "edit", "apply-para-format", cur, "--section", a.section, "--para", para,
-            "--props", json.dumps({"pageBreakBefore": False}), "-o", nxt, "--json")
+            "--props", json.dumps({"pageBreakBefore": False, "alignment": a.align}, separators=(",", ":")),
+            "-o", nxt, "--json")
         cur = nxt
     else:
         para = a.into
@@ -119,7 +124,7 @@ def main():
     cur = nxt
     ctrl = picture_ctrl(cur, a.section, para, ins["binDataId"])
     run(RHWP, "edit", "set-picture", cur, "--section", a.section, "--para", para,
-        "--ctrl", ctrl, "--props", json.dumps({"treatAsChar": True}),
+        "--ctrl", ctrl, "--props", json.dumps({"treatAsChar": True}, separators=(",", ":")),
         "-o", a.output, "--json")
 
     # 5. locate page and optionally render it

@@ -68,14 +68,20 @@ def find_barlines(ink, staves, slant=0):
     below = ink[int(bot + 0.2 * sp):int(bot + 0.7 * sp)]
     clean_above = above.mean(axis=0) <= 0.35 if above.size else np.ones_like(ok)
     clean_below = below.mean(axis=0) <= 0.35 if below.size else np.ones_like(ok)
+    # Some gaps between staves carry barlines through them (piano span bars), others
+    # don't (voice above piano, separate instrument groups). Require the barline to
+    # cross exactly those gaps where this line's barlines do - stems never cross.
     span = np.ones_like(ok)
+    spanned = 0
     for k in range(len(staves) - 1):
         gap = wide[staves[k]["bottom"] + 1:staves[k + 1]["top"]]
-        if gap.size:
-            span &= gap.mean(axis=0) >= cover
-    if len(staves) > 1 and len(runs(ok & span)) >= 2:
-        # this edition draws barlines through the gaps between staves (piano span
-        # bars); stems never do, so require it
+        if not gap.size:
+            continue
+        g = gap.mean(axis=0) >= cover
+        if len(runs(ok & g)) >= 2:
+            span &= g
+            spanned += 1
+    if spanned:
         ok &= span
     else:
         # stems stick out above or below the staff; barlines stop at it

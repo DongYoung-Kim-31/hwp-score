@@ -346,8 +346,10 @@ def connected(ink, a, b, soft=None):
     return len(hits) >= 2
 
 
-def cut_between(ink, lo, hi, min_blank, prefer="middle"):
-    """Row index to cut at inside [lo, hi): middle of the best blank run."""
+def cut_between(ink, lo, hi, min_blank, prefer="middle", left_x=None, sp=None):
+    """Row index to cut at inside [lo, hi): middle of the best blank run.
+    left_x/sp (middle cuts): start x and spacing of the lower system's staff, used to
+    hand its bar number (small mark at the line start, just above the staff) to it."""
     if hi - lo < 2:
         return (lo + hi) // 2
     blank = ~ink[lo:hi].any(axis=1)
@@ -371,6 +373,16 @@ def cut_between(ink, lo, hi, min_blank, prefer="middle"):
             gap = bot - top
             if gap >= best_gap:                # >= : later split = more to the upper
                 best_gap, best_cut = gap, (top + bot) // 2
+        if left_x is not None and sp:
+            # a bar number / rehearsal box at the start of the lower line belongs to it
+            for k, (a_, b_) in enumerate(isl):
+                if b_ > best_cut or n - b_ > 3.5 * sp:
+                    continue
+                cols = np.where(ink[lo + a_:lo + b_].any(axis=0))[0]
+                if cols.size and cols[-1] < left_x + 3 * sp and cols[-1] - cols[0] < 4 * sp:
+                    prev_end = isl[k - 1][1] if k > 0 else 0
+                    best_cut = (prev_end + a_) // 2
+                    break
         return lo + best_cut
     if prefer == "low":   # nearest to hi (just above the next staff)
         a, b = rs[-1]
@@ -493,12 +505,15 @@ def detect_systems(gray, min_span=0.12, per_staff=False, keep_title=False, no_de
             lo = 0 if keep_title else max(0, int(top - sp * 8))
             y0 = lo if keep_title else cut_between(ink, lo, top, min_blank, "low")
         else:
-            y0 = cut_between(ink, groups[i - 1][-1]["bottom"], top, min_blank, "middle")
+            y0 = cut_between(ink, groups[i - 1][-1]["bottom"], top, min_blank, "middle",
+                             left_x=min(st["x0"] for st in sys_), sp=sp)
         if i == len(groups) - 1:
             hi = min(h, int(bottom + sp * 8))
             y1 = cut_between(ink, bottom, hi, min_blank, "high")
         else:
-            y1 = cut_between(ink, bottom, groups[i + 1][0]["top"], min_blank, "middle")
+            y1 = cut_between(ink, bottom, groups[i + 1][0]["top"], min_blank, "middle",
+                             left_x=min(st["x0"] for st in groups[i + 1]),
+                             sp=max(st["sp"] for st in groups[i + 1]))
         systems.append({"staves": sys_, "y0": int(y0), "y1": int(y1), "sp": float(sp)})
     return gray, ink, paper, systems
 
@@ -529,7 +544,12 @@ def own_ink(ink, systems, i, r0, r1):
             if b_ - a_ >= long_run:
                 lines[y, a_:b_] = True
     notes = region & ~lines
-    lab, n = ndimage.label(notes, structure=np.ones((3, 3), bool))
+    # label on a slightly thickened copy so the pieces of one mark (digits of a bar
+    # number, a broken box, letters of a word) count as one, then map back
+    grow = max(1, int(round(0.25 * sp)))
+    lab, n = ndimage.label(ndimage.binary_dilation(notes, iterations=grow),
+                           structure=np.ones((3, 3), bool))
+    lab = np.where(notes, lab, 0)
     pad = int(0.5 * sp)
     own = [(st["top"] - r0 - pad, st["bottom"] - r0 + pad) for st in systems[i]["staves"]]
     nb = []
@@ -550,16 +570,36 @@ def own_ink(ink, systems, i, r0, r1):
         cnt_own = ndimage.sum(in_own, lab, index=np.arange(1, n + 1))
         cnt_nb = ndimage.sum(in_nb, lab, index=np.arange(1, n + 1))
         objs = ndimage.find_objects(lab)
+        floating = []
         for k in range(1, n + 1):
             co, cn = cnt_own[k - 1], cnt_nb[k - 1]
             if co or cn:
                 keep[k] = co >= cn
+            elif objs[k - 1] is not None:
+                floating.append((objs[k - 1][0].start, objs[k - 1][0].stop, k))
+        # floating marks (pedal Ped./release, lyrics, dynamics, bar numbers) that share
+        # a row are one row of markings and go together. A row stays with the upper
+        # line unless clearly (1.4x) closer to the lower one: pedal marks, lyrics and
+        # dynamics sit under their staff, bar numbers just above theirs.
+        floating.sort()
+        rows_ = []
+        for ya, yb, k in floating:
+            if rows_ and ya < rows_[-1][1]:
+                rows_[-1][1] = max(rows_[-1][1], yb)
+                rows_[-1][2].append(k)
             else:
-                sl = objs[k - 1]
-                mid = (sl[0].start + sl[0].stop) / 2
-                d_own = min(min(abs(mid - a_), abs(mid - b_)) for a_, b_ in own)
-                d_nb = min((min(abs(mid - a_), abs(mid - b_)) for a_, b_ in nb), default=1e9)
-                keep[k] = d_own <= d_nb
+                rows_.append([ya, yb, [k]])
+        own_c = sum((a_ + b_) / 2 for a_, b_ in own) / len(own)
+        for ya, yb, ks in rows_:
+            mid = (ya + yb) / 2
+            d_own = min(min(abs(mid - a_), abs(mid - b_)) for a_, b_ in own)
+            d_nb = min((min(abs(mid - a_), abs(mid - b_)) for a_, b_ in nb), default=1e9)
+            if mid > own_c:      # row is below our staff: we are the upper line
+                take = d_own <= 1.4 * d_nb
+            else:                # row is above our staff: we are the lower line
+                take = 1.4 * d_own < d_nb
+            for k in ks:
+                keep[k] = take
     mine = keep[lab] & notes
     own_rows = np.zeros(region.shape[0], bool)
     for st in systems[i]["staves"]:
@@ -574,8 +614,10 @@ def split_page(gray, page_no, outdir, stem, args, counter):
     h = ink.shape[0]
     for i, sy in enumerate(systems):
         y0, y1 = sy["y0"], sy["y1"]
-        dirty = ink[y0].any() or ink[min(h - 1, y1 - 1)].any()
-        if dirty and not args.per_staff:
+        # Between two lines, hand every separate mark to the nearer staff (bar numbers,
+        # rehearsal letters, pedal marks, lyrics, interleaved notes) instead of trusting
+        # one straight cut; the outer edges of the page keep the plain cuts.
+        if len(systems) > 1 and not args.per_staff:
             # the straight cut runs through notes: separate the lines blob by blob
             # within the span between the neighbouring systems' staves
             # label over a span that includes the neighbours' nearest staves, so
@@ -583,6 +625,24 @@ def split_page(gray, page_no, outdir, stem, args, counter):
             r0 = systems[i - 1]["staves"][-1]["top"] if i > 0 else y0
             r1 = systems[i + 1]["staves"][0]["bottom"] + 1 if i + 1 < len(systems) else y1
             mine = own_ink(ink, systems, i, r0, r1)
+            if i == 0:
+                # page number printed at the outer corner above the first line
+                from scipy import ndimage
+                st0 = sy["staves"][0]
+                top_rel = max(0, st0["top"] - r0)
+                top_part = mine[:top_rel]
+                g = max(1, int(round(0.3 * sy["sp"])))
+                lab, nl = ndimage.label(ndimage.binary_dilation(top_part, iterations=g),
+                                        structure=np.ones((3, 3), bool))
+                lab = np.where(top_part, lab, 0)
+                for k, sl in enumerate(ndimage.find_objects(lab), 1):
+                    if sl is None:
+                        continue
+                    xa, xb = sl[1].start, sl[1].stop
+                    xc = (xa + xb) / 2
+                    if (xc > st0["x1"] - 2.5 * sy["sp"] or xb < st0["x0"]) and \
+                            xb - xa < 4 * sy["sp"] and sl[0].stop - sl[0].start < 2.5 * sy["sp"]:
+                        top_part[lab == k] = False
             cols = np.where(mine.any(axis=0))[0]
             rows = np.where(mine.any(axis=1))[0]
             x0, x1 = int(cols[0]), int(cols[-1]) + 1
@@ -598,6 +658,20 @@ def split_page(gray, page_no, outdir, stem, args, counter):
             src = Image.fromarray(arr)
         else:
             band = ink[y0:y1]
+            if i == 0:
+                # a page number printed at the outer corner above the first line
+                st0 = sy["staves"][0]
+                sp0 = sy["sp"]
+                above = band[:max(0, st0["top"] - y0)]
+                for a_, b_ in runs(above.any(axis=1)):
+                    cc = np.where(above[a_:b_].any(axis=0))[0]
+                    if cc.size and cc[-1] - cc[0] < 3 * sp0 and b_ - a_ < 2.5 * sp0 and \
+                            (cc[0] > st0["x1"] - 3 * sp0 or cc[-1] < st0["x0"] + 1 * sp0):
+                        band = band.copy()
+                        band[a_:b_, cc[0]:cc[-1] + 1] = False
+                        arr = np.asarray(gray).copy()
+                        arr[y0 + a_:y0 + b_, cc[0]:cc[-1] + 1] = 255
+                        gray = Image.fromarray(arr)
             cols = np.where(band.any(axis=0))[0]
             rows = np.where(band.any(axis=1))[0]
             # crop strictly inside this system's cut lines (never past them into the

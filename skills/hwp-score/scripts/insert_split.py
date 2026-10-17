@@ -26,6 +26,7 @@ def main():
                     help="insert after this paragraph (0-based; -1 = top of section)")
     ap.add_argument("--section", type=int, default=0)
     ap.add_argument("--width", type=int, help="width of the widest system in HWPUNIT")
+    ap.add_argument("--align", choices=["left", "center", "right"], default="left")
     ap.add_argument("--pages", help="PDF pages to use, e.g. 1-2,4")
     ap.add_argument("--per-staff", action="store_true")
     ap.add_argument("--group", type=int, default=1, help="N lines (systems) per picture")
@@ -89,7 +90,8 @@ def main():
         nxt = os.path.join(tmp, f"step{k}{ext}")
         out = subprocess.run([sys.executable, os.path.join(HERE, "insert_score.py"), cur,
                               s["png"], "-o", nxt, "--after", str(after),
-                              "--section", str(a.section), "--width", str(round(pw * scale))],
+                              "--section", str(a.section), "--width", str(round(pw * scale)),
+                              "--align", a.align],
                              capture_output=True, text=True)
         if out.returncode:
             sys.exit(f"system {k} ({s['png']}): {out.stderr.strip() or out.stdout.strip()}")

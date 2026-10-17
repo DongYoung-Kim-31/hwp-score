@@ -57,6 +57,17 @@ python3 <skill-dir>/scripts/insert_split.py IN.hwp score.pdf -o IN_악보.hwp --
 ```
 
 - Multiple inputs are taken in order (`score.pdf p2.jpg p3.jpg`). `--pages 1-2,4` limits PDF pages.
+- To take only some lines (e.g. "1, 2, 6–8번째 줄"), run `split_score.py` once, pick the
+  numbered crops, and insert them one by one with `insert_score.py --after <previous
+  paragraph>`; a part of a line ("9번째 줄 2번째 마디까지") is `measures.py --take` with
+  the red ids of that line's first bars. Use the same `--dpi` for both so sizes match,
+  and give every picture `--width body * png_w / widest_png_w`.
+- Marks between two lines are assigned blob by blob: bar numbers / rehearsal boxes go to
+  the line below, a row of pedal marks / lyrics / dynamics stays with the line above
+  unless clearly closer to the lower one; a page number at the outer corner above the
+  first line is removed.
+- Inserted score paragraphs get `--align left` (default; center/right possible) and no
+  "page break before", whatever the previous paragraph had.
 - `--group N` puts N consecutive lines in one picture ("2줄씩 잘라서" → `--group 2`); works
   across page breaks and keeps each line's original indent (first line's instrument names).
 - One inline picture paragraph per **system** (a staff, or staves joined by a brace /
@@ -139,6 +150,8 @@ piece), drops the borrowed line's printed bar number, aligns **each staff separa
 (pedal, fingering, dynamics). Barlines = vertical strokes across every staff of the
 line; where the edition draws them through the gap between piano staves that is
 required (stems never do), otherwise they must stop at the staff (stems stick out).
+Barlines must cross only those gaps between staves where this line's barlines do (piano
+span bars yes, voice-to-piano gap no).
 Barline detection is reliable on engraved scores and photos of them (phone photo: 30/32
 measures); on **handwritten** scores it is not — stitch measures only from engraved sources.
 Limits: all picked measures must come from one score with the same number of staves
