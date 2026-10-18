@@ -1,0 +1,4 @@
+interface:
+  display_name: "한글 악보 넣기 (hwp-score)"
+  short_description: "악보 PDF·스캔·사진을 줄·마디 단위로 잘라 HWP/HWPX에 넣고, ABC 악보를 그려 넣습니다"
+  default_prompt: "$hwp-score로 이 악보 PDF를 줄별로 잘라서 새 HWPX 파일에 넣어 줘."

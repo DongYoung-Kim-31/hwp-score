@@ -100,36 +100,68 @@ def find_barlines(ink, staves, slant=0):
 
 
 def notation_mask(ink, staves, sp):
-    """ink in and around the staves with the staff lines removed (rows that are ink
-    across most of the line are staff lines; measured, not computed, so line
-    thickness / anti-aliasing doesn't leave residue)"""
+    """ink in and around the staves with the staff lines removed. Staff lines are
+    the long horizontal runs (>= 2.5 staff spaces) - measured per row, so lines that
+    are slightly tilted in a scan (spread over two rows) are removed too."""
     x0 = min(st["x0"] for st in staves)
     x1 = max(st["x1"] for st in staves)
     keep = np.zeros(ink.shape[0], bool)
     for st in staves:
         keep[max(0, st["top"] - int(sp)):st["bottom"] + int(sp) + 1] = True
-    linefrac = ink[:, x0:x1 + 1].mean(axis=1)
-    keep &= linefrac < 0.5
-    return ink[keep]
+    rows = np.where(keep)[0]
+    sub = ink[rows].copy()
+    lines = np.zeros_like(sub)
+    long_run = int(2.5 * sp)
+    for i in range(sub.shape[0]):
+        for a_, b_ in runs(sub[i, x0:x1 + 1]):
+            if b_ - a_ >= long_run:
+                lines[i, x0 + a_:x0 + b_] = True
+    # a tilted line steps from row to row and leaves short pieces next to the long
+    # runs: clear one row above and below each run as well
+    grown = lines.copy()
+    grown[1:] |= lines[:-1]
+    grown[:-1] |= lines[1:]
+    return sub & ~grown
+
+
+def _gap_after_header(prof, sp):
+    """(start, end) of the widest blank gap in a column profile (relative), or None"""
+    gaps = [(b_ - a_, a_, b_) for a_, b_ in runs(~prof) if b_ - a_ >= max(3, int(0.3 * sp))]
+    if not gaps:
+        return None
+    # the widest gap, but among gaps of about that width the leftmost: in dense
+    # engravings the space before the first note is barely wider than spaces
+    # between the first notes
+    widest = max(g[0] for g in gaps)
+    _, a_, b_ = min((g for g in gaps if g[0] >= 0.8 * widest), key=lambda g: g[1])
+    return a_, b_
+
+
+def header_gaps(ink, staves, start, limit, sp):
+    """All gaps (abs x ranges) blank on every staff, 2.5-10 staff spaces after start."""
+    lo, hi = start + int(2.5 * sp), min(limit, start + int(10 * sp))
+    if hi - lo < 3:
+        return []
+    prof = np.zeros(hi - lo, bool)
+    for st in staves:
+        prof |= notation_mask(ink, [st], sp)[:, lo:hi].sum(axis=0) > 0
+    return [(lo + a_, lo + b_) for a_, b_ in runs(~prof) if b_ - a_ >= max(2, int(0.15 * sp))]
 
 
 def header_end(ink, staves, start, limit, sp):
-    """End x of the clef + key signature (+ time signature) at the start of a line.
-
-    The widest blank gap between 2.5 and 10 staff spaces after the line start: the
-    space before the first note is wider than the gaps inside a key signature or
-    between clef and key."""
-    nm = notation_mask(ink, staves, sp)
+    """End x of the clef + key signature (+ time signature) at the start of a line:
+    the widest gap, between 2.5 and 10 staff spaces after the line start, that is
+    blank on every staff of the line (the space before the first notes; gaps inside a
+    key signature are narrower, and a rest-filled stretch on one staff isn't blank on
+    the others). Staff lines are removed per staff before looking."""
     lo, hi = start + int(2.5 * sp), min(limit, start + int(10 * sp))
     if hi - lo < 3:
         return None
-    prof = nm[:, lo:hi].sum(axis=0) > 0
-    gaps = [(b - a, a, b) for a, b in runs(~prof)]
-    gaps = [g for g in gaps if g[0] >= max(3, int(0.4 * sp))]
-    if not gaps:
-        return None
-    w, a, b = max(gaps)
-    return lo + (a + b) // 2
+    prof = np.zeros(hi - lo, bool)
+    for st in staves:
+        prof |= notation_mask(ink, [st], sp)[:, lo:hi].sum(axis=0) > 0
+    g = _gap_after_header(prof, sp)
+    return lo + (g[0] + g[1]) // 2 if g else None
 
 
 def analyse(inputs, dpi, first_measure, keep_title=False):
@@ -143,6 +175,12 @@ def analyse(inputs, dpi, first_measure, keep_title=False):
             pages.append({"src": os.path.basename(path), "page": pno, "gray": gray,
                           "ink": ink, "paper": paper, "systems": systems})
             for si, sy in enumerate(systems):
+                sy["_page"] = (pi, pno)
+                # the staves of one line span the same width; a staff whose lines were
+                # only picked up partway (dense notes at the start) gets the line's extent
+                lx0 = min(st["x0"] for st in sy["staves"])
+                lx1 = max(st["x1"] for st in sy["staves"])
+                sy["staves"] = [dict(st, x0=lx0, x1=lx1) for st in sy["staves"]]
                 bars, x0, x1, sp = find_barlines(ink, sy["staves"])
                 if len(sy["staves"]) > 1:
                     # leaning / wobbly barlines (manuscripts, phone photos). Only where
@@ -152,12 +190,44 @@ def analyse(inputs, dpi, first_measure, keep_title=False):
                     if len(tb) > len(bars):
                         bars = tb
                 start = x0
-                if bars and bars[0][0] - x0 <= 1.0 * sp:      # system start line
+                # the line's opening barline (system start line) can sit up to ~2 staff
+                # spaces right of where the staff lines begin (Peters, Breitkopf...);
+                # a real first barline never does - the clef alone is wider than that
+                if bars and bars[0][0] - x0 <= 3.0 * sp:      # system start line
                     start = bars[0][1]
                     bars = bars[1:]
                 limit = bars[0][0] if bars else x1
                 he = header_end(ink, sy["staves"], start, limit, sp) or start
-                sy.update({"bars": bars, "x0": x0, "x1": x1, "header": (x0, he)})
+                sy.update({"bars": bars, "x0": x0, "x1": x1, "header": (x0, he), "sp": sp,
+                           "_start": start, "_gaps": header_gaps(ink, sy["staves"], start, limit, sp)})
+    # Within one piece the clef + key header is about equally wide on every line
+    # (only the first line adds the time signature). Where a line's own guess is off
+    # (e.g. the clef-to-key gap was taken), use the gap nearest the typical width.
+    allsys = [sy for pg in pages for sy in pg["systems"]]
+    widths = [sy["header"][1] - sy["_start"] for sy in allsys[1:] if sy["header"][1] > sy["_start"]]
+    if len(widths) >= 3:
+        typical = float(np.median(widths))
+        for sy in allsys[1:]:
+            cur = sy["header"][1] - sy["_start"]
+            if abs(cur - typical) <= 1.5 * sy["sp"]:
+                continue
+            mid = None
+            if sy["_gaps"]:
+                best = min(sy["_gaps"], key=lambda g: abs((g[0] + g[1]) / 2 - sy["_start"] - typical))
+                if abs((best[0] + best[1]) / 2 - sy["_start"] - typical) <= 1.5 * sy["sp"]:
+                    mid = (best[0] + best[1]) // 2
+            if mid is None:
+                # no usable gap (a first note sits right against the key signature):
+                # the key signature is as wide here as on the other lines
+                first_bar = sy["bars"][0][0] if sy["bars"] else sy["x1"]
+                if sy["_start"] + typical < first_bar - sy["sp"]:
+                    mid = int(sy["_start"] + typical)
+            if mid is not None:
+                sy["header"] = (sy["header"][0], int(mid))
+    for pi, pg in enumerate(pages):
+        ink, pno = pg["ink"], pg["page"]
+        for si, sy in enumerate(pg["systems"]):
+                bars, x0, x1, sp, he = sy["bars"], sy["x0"], sy["x1"], sy["sp"], sy["header"][1]
                 lefts = [he] + [b for _, b in bars]
                 rights = [b for _, b in bars]
                 inner_r = [a_ for a_, _ in bars]   # where the closing barline starts
@@ -258,21 +328,62 @@ def stitch(pages, measures, nums, out_png):
         sy = pg["systems"][m["system"]]
         if len(sy["staves"]) != nst:
             raise SystemExit(f"measure {m['n']} has {len(sy['staves'])} staves, expected {nst}")
-        pieces.append((pg, sy, m["x"][0], m["x"][1]))
+        # start 2 px past the previous barline so its anti-aliased edge doesn't show
+        # as a stray thin line right after the clef/key header
+        pieces.append((pg, sy, m["x"][0] + 2, m["x"][1]))
     W = sum(r - l for _, _, l, r in pieces)
     canvas = Image.new("L", (W, H + 2 * int(4 * sp)), 255)
     off_y = int(4 * sp)  # headroom: other lines may carry taller markings
+    # ink in a line's band that belongs to the neighbouring lines (their bar numbers,
+    # notes reaching over) - decided blob by blob as when cutting whole lines
+    owned = {}
+
+    def foreign(pg, sy):
+        key = (id(pg), id(sy))
+        if key not in owned:
+            systems = pg["systems"]
+            i = next(j for j, s_ in enumerate(systems) if s_ is sy)
+            r0 = systems[i - 1]["staves"][-1]["top"] if i > 0 else sy["y0"]
+            r1 = systems[i + 1]["staves"][0]["bottom"] + 1 if i + 1 < len(systems) else sy["y1"]
+            mine = ss.own_ink(pg["ink"], systems, i, r0, r1)
+            other = pg["ink"][r0:r1] & ~mine
+            from scipy import ndimage
+            other = ndimage.binary_dilation(other, iterations=2) & ~ndimage.binary_dilation(mine, iterations=1)
+            owned[key] = (r0, other)
+        return owned[key]
+
     x = 0
     for pi_, (pg, sy, l, r) in enumerate(pieces):
+        f_r0, f_other = foreign(pg, sy)
         for k, (a, b) in enumerate(slabs(sy)):
             # align this staff's top line with the reference line's staff k
             dy = (ref["staves"][k]["top"] - ref["y0"]) - (sy["staves"][k]["top"] - a)
             part = pg["gray"].crop((l, a, r, b))
             part = part.point(lambda v, t=pg["paper"] - 40: 255 if v >= t else v)
+            # blank out the neighbours' ink inside this slab
+            ya, yb = max(a, f_r0), min(b, f_r0 + f_other.shape[0])
+            if yb > ya:
+                sub = f_other[ya - f_r0:yb - f_r0, l:r]
+                if sub.any():
+                    arr = np.asarray(part).copy()
+                    arr[ya - a:yb - a][sub] = 255
+                    part = Image.fromarray(arr)
             if pi_ == 0 and k == 0:
-                # header: drop the source line's printed bar number, which sits above
-                # the line start (left of / above the clef), and anything high above
+                # header: keep only what hangs from the staff (the clef's top); drop
+                # free-standing marks above it - bar numbers, rehearsal letters, tempo
+                from scipy import ndimage
                 st0 = sy["staves"][0]
+                cut_rel = int(st0["top"]) - a
+                if cut_rel > 0:
+                    arr = np.asarray(part)
+                    above = arr[:cut_rel] < 200
+                    lab, nlab = ndimage.label(above, structure=np.ones((3, 3), bool))
+                    touching = set(np.unique(lab[-1][lab[-1] > 0]).tolist())
+                    drop = (lab > 0) & ~np.isin(lab, list(touching))
+                    if drop.any():
+                        arr = arr.copy()
+                        arr[:cut_rel][ndimage.binary_dilation(drop, iterations=1)] = 255
+                        part = Image.fromarray(arr)
                 left_w = int(st0["x0"] - l + 0.6 * sy["sp"])
                 above = int(st0["top"] - 0.3 * sy["sp"]) - a
                 if above > 0 and left_w > 0:

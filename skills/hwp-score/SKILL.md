@@ -18,7 +18,10 @@ Chain: ABC or MusicXML → **verovio** (Python) SVG → **rsvg-convert** PNG →
 
 ## Setup (once; check before first use)
 
-`<skill-dir>` below = this skill's **Base directory** (shown when the skill loads).
+`<skill-dir>` below = the folder that contains this SKILL.md: Claude Code shows it as the
+skill's **Base directory**; in Codex it is `~/.codex/skills/hwp-score` (or
+`$CODEX_HOME/skills/hwp-score`). Works the same in any agent that can run shell commands
+and look at PNG files.
 Run the setup script once per machine; it is idempotent and prints what it did:
 
 ```bash
@@ -143,6 +146,10 @@ Automates the "아크로뱃 스냅숏 → 그림판에서 마디 잘라 이어�
    Just the PNGs: `measures.py score.pdf --take 4-7 -o line.png` (or `--reflow 4`).
 3. Read the stitched PNG / preview page before reporting.
 
+Every stitched line starts with the clefs (treble/bass/alto… per staff) and key signature,
+also when the bars come from the middle of a line: the header is found per line (the gap
+blank on all staves after the clef + key), checked against the piece's typical header
+width, and cut at that width when a first note touches the key signature.
 What the stitcher does: renders at 300 dpi (blog tip: 200–300% zoom), puts the clef +
 key signature in front (the time signature and tempo only when the line starts the
 piece), drops the borrowed line's printed bar number, aligns **each staff separately**

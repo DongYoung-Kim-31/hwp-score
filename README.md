@@ -25,6 +25,28 @@ Python venv(`~/.cache/hwp-score/venv`: verovio, pypdfium2, numpy, pillow, scipy)
 
 요구: macOS, Python 3.10+, Homebrew. 한컴오피스는 필요 없다(결과 확인용으로만).
 
+## Codex에서 쓰기
+
+같은 스킬 폴더(`skills/hwp-score`)를 Codex 스킬로 그대로 쓸 수 있다.
+
+**방법 1 — Codex에게 말로 설치** (Codex 기본 내장 `skill-installer` 사용)
+
+```
+$skill-installer install https://github.com/DongYoung-Kim-31/hwp-score/tree/main/skills/hwp-score
+```
+
+**방법 2 — 직접 복사**
+
+```bash
+git clone https://github.com/DongYoung-Kim-31/hwp-score
+mkdir -p ~/.codex/skills && cp -R hwp-score/skills/hwp-score ~/.codex/skills/
+```
+
+설치 후 새 대화에서 `$hwp-score 이 악보 PDF 줄별로 잘라서 hwpx로 만들어 줘`처럼 부른다.
+처음 한 번 `setup.sh`가 Python venv(`~/.cache/hwp-score`)·librsvg·rhwp를 설치하는데,
+Codex 샌드박스에서는 네트워크·작업 폴더 밖 쓰기 권한 승인을 요청할 수 있다.
+업데이트: `~/.codex/skills/hwp-score`를 지우고 다시 설치.
+
 ## 구성
 
 ```
@@ -37,6 +59,7 @@ skills/hwp-score/
   scripts/split_score.py   PDF/이미지 → 줄(보표) 단위 PNG
   scripts/measures.py      마디 인식·번호 미리보기·마디 이어붙이기
   scripts/insert_split.py  줄 단위/마디 단위 결과를 순서대로 일괄 삽입
+  agents/openai.yaml       Codex 표시 정보
   examples/twinkle.abc     예제 (작은 별, 한글 가사)
 ```
 
