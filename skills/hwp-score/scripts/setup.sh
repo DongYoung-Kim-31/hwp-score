@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-time setup for the hwp-score skill (macOS). Idempotent: re-running only fills gaps.
-#   - Python venv ~/.cache/hwp-score/venv with verovio, pypdfium2, numpy, pillow
+#   - Python venv ~/.cache/hwp-score/venv with verovio, pypdfium2, numpy, pillow, scipy, olefile
 #   - rsvg-convert (Homebrew librsvg)
 #   - rhwp CLI in ~/.local/bin (GitHub release of edwardkim/rhwp, SHA-256 verified)
 set -euo pipefail
@@ -16,9 +16,9 @@ if [ ! -x "$VENV/bin/python" ]; then
   say "creating venv $VENV"
   python3 -m venv "$VENV"
 fi
-if ! "$VENV/bin/python" -c "import verovio, pypdfium2, numpy, PIL, scipy" 2>/dev/null; then
-  say "installing Python packages (verovio pypdfium2 numpy pillow scipy)"
-  "$VENV/bin/pip" install -q --disable-pip-version-check verovio pypdfium2 numpy pillow scipy
+if ! "$VENV/bin/python" -c "import verovio, pypdfium2, numpy, PIL, scipy, olefile" 2>/dev/null; then
+  say "installing Python packages (verovio pypdfium2 numpy pillow scipy olefile)"
+  "$VENV/bin/pip" install -q --disable-pip-version-check verovio pypdfium2 numpy pillow scipy olefile
 fi
 say "python ok: $("$VENV/bin/python" -c 'import verovio; print("verovio", verovio.toolkit().getVersion())')"
 

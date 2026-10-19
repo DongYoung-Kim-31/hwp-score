@@ -11,6 +11,8 @@ Claude Code 플러그인. 악보를 한글 문서에 넣을 때의 "캡처 → �
 | "엘리제를 위하여 4~7마디를 한 줄로 만들어 넣어줘" | 마디줄 인식 → 여러 줄에 걸친 마디를 음자리표·조표와 함께 한 줄로 이어붙여 삽입, `--reflow 4`로 4마디씩 재배치 |
 
 그림은 본문 여백 안에 "글자처럼 취급"으로 들어가고, 원본 문서는 덮어쓰지 않고 항상 새 파일로 저장한다.
+잘라 넣은 악보는 해상도가 다른 PDF·스캔·사진을 섞어도, 같은 문서에 여러 번 나눠 넣어도 오선 크기가 같다
+(오선 간격 기준 크기 조정, 기본 1.3 mm — `--staff-gap`).
 
 ## 설치
 
@@ -20,7 +22,7 @@ claude plugin install hwp-score@hwp-score
 ```
 
 처음 쓸 때 Claude가 `skills/hwp-score/scripts/setup.sh`를 실행해 의존성을 설치한다(사용자 확인 후):
-Python venv(`~/.cache/hwp-score/venv`: verovio, pypdfium2, numpy, pillow, scipy), Homebrew `librsvg`,
+Python venv(`~/.cache/hwp-score/venv`: verovio, pypdfium2, numpy, pillow, scipy, olefile), Homebrew `librsvg`,
 `rhwp` CLI(github.com/edwardkim/rhwp 릴리스, SHA-256 검증, `~/.local/bin/rhwp`).
 
 요구: macOS, Python 3.10+, Homebrew. 한컴오피스는 필요 없다(결과 확인용으로만).

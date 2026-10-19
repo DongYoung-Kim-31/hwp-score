@@ -607,6 +607,48 @@ def own_ink(ink, systems, i, r0, r1):
     return mine | (lines & own_rows[:, None])
 
 
+def refine_sp(gray, st, nstrips=12):
+    """Sub-pixel staff spacing of one staff (detection works in whole/half pixels, so
+    equal staves can read 13.5 vs 14 px). In each vertical strip a 5-line comb is slid
+    over the darkness profile, each line's centre is taken as the dark-weighted centroid
+    around its tooth, and the spacing is the least-squares slope. Uses grey levels, so
+    faint grey scan lines count; strips are measured on their own, so wavy / perspective
+    staves work; strips where the fit is irregular (beams, chords) are skipped."""
+    sp = st["sp"]
+    arr = np.asarray(gray, dtype=np.float32)
+    h = arr.shape[0]
+    y0, y1 = max(0, int(st["top"] - 1.5 * sp)), min(h, int(st["bottom"] + 1.5 * sp) + 1)
+    half = max(1.0, 0.3 * sp)
+    est = []
+    for xs in np.array_split(np.arange(st["x0"], st["x1"] + 1), nstrips):
+        if len(xs) < 8:
+            continue
+        prof = 255.0 - arr[y0:y1, xs[0]:xs[-1] + 1].mean(axis=1)
+        prof = np.clip(prof - np.median(prof), 0, None)
+        if prof.max() <= 0:
+            continue
+        ys = np.arange(len(prof), dtype=np.float32)
+        base = st["top"] - y0
+        offs = np.arange(-sp, sp + 0.25, 0.25)
+        score = [sum(np.interp(base + o + k * sp, ys, prof) for k in range(5)) for o in offs]
+        o = offs[int(np.argmax(score))]
+        cs = []
+        for k in range(5):
+            c = base + o + k * sp
+            m = (ys >= c - half) & (ys <= c + half)
+            w = prof[m]
+            if w.sum() <= 0:
+                break
+            cs.append(float((ys[m] * w).sum() / w.sum()))
+        if len(cs) < 5:
+            continue
+        g, icpt = np.polyfit(np.arange(5), cs, 1)
+        resid = np.abs(np.array(cs) - (icpt + g * np.arange(5)))
+        if abs(g - sp) <= 0.2 * sp and resid.max() <= 0.12 * g:
+            est.append(float(g))
+    return float(np.median(est)) if len(est) >= 3 else float(sp)
+
+
 def split_page(gray, page_no, outdir, stem, args, counter):
     gray, ink, paper, systems = detect_systems(gray, args.min_span, args.per_staff,
                                                args.keep_title, args.no_deskew)
@@ -683,7 +725,16 @@ def split_page(gray, page_no, outdir, stem, args, counter):
         png = os.path.join(outdir, f"{stem}-{counter[0]:02d}.png")
         clean_crop(src, paper, (x0, yy0, x1, yy1), int(sy["sp"])).save(png)
         results.append({"png": png, "page": page_no, "staves": len(sy["staves"]),
-                        "box": [int(x0), int(yy0), int(x1), int(yy1)]})
+                        "box": [int(x0), int(yy0), int(x1), int(yy1)],
+                        "sp": float(np.median([refine_sp(gray, st) for st in sy["staves"]]))})
+    # staff spacing (px between staff lines) is what insert_split sizes pictures by.
+    # A printed page uses one staff size: give every line the page median so detection
+    # noise doesn't jitter sizes; keep a line's own value only when it clearly differs
+    # (phone photos in perspective, a smaller ossia/second piece on the page).
+    if results:
+        med = float(np.median([r["sp"] for r in results]))
+        for r in results:
+            r["sp"] = round(r["sp"] if abs(r["sp"] - med) > 0.03 * med else med, 2)
     return results
 
 
@@ -713,7 +764,8 @@ def group_systems(systems, n, outdir):
             im.close()
             os.remove(s["png"])
         grouped.append({"png": png, "page": part[0]["page"], "pages": sorted({s["page"] for s in part}),
-                        "staves": part[0]["staves"], "lines": len(part)})
+                        "staves": part[0]["staves"], "lines": len(part),
+                        "sp": round(float(np.median([s["sp"] for s in part])), 2)})
     return grouped
 
 

@@ -403,6 +403,7 @@ def stitch(pages, measures, nums, out_png):
     from PIL import ImageOps
     ImageOps.expand(canvas, border=int(sp), fill=255).save(out_png)
     return {"png": out_png, "measures": nums,
+            "sp": round(float(np.median([ss.refine_sp(ref_pg["gray"], st) for st in ref["staves"]])), 2),
             "from": sorted({(m["page"], m["system"]) for m in picks})}
 
 

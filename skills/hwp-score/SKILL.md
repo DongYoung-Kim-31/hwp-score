@@ -63,8 +63,8 @@ python3 <skill-dir>/scripts/insert_split.py IN.hwp score.pdf -o IN_악보.hwp --
 - To take only some lines (e.g. "1, 2, 6–8번째 줄"), run `split_score.py` once, pick the
   numbered crops, and insert them one by one with `insert_score.py --after <previous
   paragraph>`; a part of a line ("9번째 줄 2번째 마디까지") is `measures.py --take` with
-  the red ids of that line's first bars. Use the same `--dpi` for both so sizes match,
-  and give every picture `--width body * png_w / widest_png_w`.
+  the red ids of that line's first bars. Simpler: run `insert_split.py` once per piece
+  of the selection — separate runs get the same staff size automatically (below).
 - Marks between two lines are assigned blob by blob: bar numbers / rehearsal boxes go to
   the line below, a row of pedal marks / lyrics / dynamics stays with the line above
   unless clearly closer to the lower one; a page number at the outer corner above the
@@ -76,8 +76,18 @@ python3 <skill-dir>/scripts/insert_split.py IN.hwp score.pdf -o IN_악보.hwp --
 - One inline picture paragraph per **system** (a staff, or staves joined by a brace /
   system barline — piano grand staff, choir SATB stay together). `--per-staff` cuts every
   staff separately instead.
-- One common scale: the widest system fills the body width (`--width` to override); a
-  short last line keeps its real length. Systems flow across pages and are never split.
+- **Same staff size everywhere** (오선 크기 통일): pictures are sized by their staff-line
+  spacing, not their pixel width, so lines from PDFs, scans and photos of any resolution
+  come out with one staff size (default gap 1.3 mm = staff height 5.2 mm; `--staff-gap MM`
+  to choose). Each inserted PNG carries its staff spacing in a PNG text chunk; a later
+  `insert_split.py` run on the same document reads it back (`doc_scores.py DOC`) and uses
+  the same gap. If a line is too wide for the body at that gap, the gap is lowered until
+  it fits and **the score pictures already in the document are resized too**
+  (`resized_existing` in the JSON, plus a `note`) — tell the user, and offer splitting long
+  lines with `--measures`/`--reflow N` if the staves got small. `--no-match` ignores
+  earlier scores. A short last line keeps its real length. Systems flow across pages and
+  are never split. ABC pictures from `insert_score.py` are not part of this (they fill
+  the body width; ≈1.3 mm on A4 with 30 mm margins).
 - Page header/title above the first system and footer/page number below the last are
   dropped; `--keep-title` keeps the header with the first system. Lyrics, dynamics,
   ledger-line notes and measure numbers stay with their system (cut = middle of the
@@ -137,7 +147,7 @@ Automates the "아크로뱃 스냅숏 → 그림판에서 마디 잘라 이어�
    differently, so red ids can drift from printed numbers after such spots. When the
    user names printed bar numbers, translate them to red ids from the preview.
    `--first-measure 0` when the piece starts with a pickup (못갖춘마디).
-2. **Stitch & insert** (one inline picture per resulting line, common scale):
+2. **Stitch & insert** (one inline picture per resulting line, same staff size):
    ```bash
    python3 <skill-dir>/scripts/insert_split.py IN.hwpx score.pdf -o OUT.hwpx --after N --first-measure 0 --measures "4-7"          # one line
    python3 <skill-dir>/scripts/insert_split.py IN.hwpx score.pdf -o OUT.hwpx --after N --measures "1-4;5-8;9-12"                # several lines

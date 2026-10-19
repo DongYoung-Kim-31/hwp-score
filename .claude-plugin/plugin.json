@@ -1,6 +1,6 @@
 {
   "name": "hwp-score",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "한글(HWP/HWPX) 문서에 악보 넣기: ABC/MusicXML 악보를 그려 넣고, 악보 PDF·스캔을 줄(보표) 단위로 잘라 넣고, 여러 줄의 마디를 한 줄로 이어 붙여 넣는다.",
   "author": {
     "name": "DongYoung-Kim-31"
